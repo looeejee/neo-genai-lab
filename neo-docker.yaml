@@ -1,0 +1,66 @@
+neo4j:
+  name: "neo4j-cluster"
+  minimumClusterSize: 3
+  resources:
+    cpu: "1"
+    memory: "4Gi"
+  edition: "enterprise"
+  password: "zaq12wsx" 
+  acceptLicenseAgreement: "yes"
+  startupProbe:
+    failureThreshold: 1000
+    periodSeconds: 30
+config:
+  server.memory.heap.initial_size: "3G"
+  server.memory.heap.max_size: "3G"
+  server.memory.pagecache.size: "1G"
+  dbms.security.procedures.unrestricted: "ai.*,gds.*,apoc.*,bloom.*"
+  server.unmanaged_extension_classes: "com.neo4j.bloom.server=/bloom,semantics.extension=/rdf"
+  dbms.security.http_auth_allowlist: "/,/browser.*,/bloom.*"
+  #THESE SETTINGS OBFUSCATE TOKEN USED FOR LLM
+  #db.logs.query.obfuscate_errors: "true"
+  #db.logs.query.obfuscate_literals: "true"
+  #db.logs.query.parameter_logging_enabled: "false"
+
+  #dbms.bloom.license_file: "/licenses/bloom.license"
+
+#image:
+#  customImage: neo-genai-test:dev
+#  imagePullPolicy: Never
+
+jvm:
+  additionalJvmArguments:
+    server.jvm.additional: "-XX:NativeMemoryTracking=summary"
+
+# additional environment variables for the Neo4j Container
+env: 
+  TEST: 'MY_CUSTOM_ENV'
+  NEO4J_PLUGINS: '["genai"]'
+
+
+# podAntiAffinity: false required on Docker Desktop / Minikube (default true)
+# so the pods can run on a single k8s node.
+podSpec:
+  podAntiAffinity: false
+
+volumes:
+  data:
+    mode: defaultStorageClass
+    defaultStorageClass:
+      requests:
+        storage: 4Gi
+
+additionalVolumes:
+  - name: genai-conf
+    configMap:
+      name: neo-genai-conf 
+      defaultMode: 0440
+      items:
+        - key: genai.conf
+          path: genai.conf
+
+additionalVolumeMounts:
+  - name: genai-conf
+    mountPath: /config/genai.conf
+    subPath: genai.conf
+    readOnly: true
