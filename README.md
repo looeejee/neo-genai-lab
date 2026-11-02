@@ -305,3 +305,57 @@ To make this a GraphRAG example, the following steps could be explored:
   available in Ollama.
 - When restoring a dump, use the procedure and command options appropriate to
   the Neo4j version and deployment mode.
+
+
+## PROXY
+
+
+```
+kubectl apply -f openai-egress-proxy.yaml
+kubectl -n neo4j rollout status deployment/openai-egress-proxy
+```
+
+Test the route from inside the namespace. A 401 from OpenAI is expected with a dummy key; it confirms the request reached the upstream API without putting a real key in your shell history.
+
+```
+kubectl run openai-proxy-test \
+  -n neo4j \
+  --rm -i \
+  --restart=Never \
+  --image=curlimages/curl \
+  -- curl -i \
+    http://openai-egress-proxy:8080/v1/models \
+    -H 'Authorization: Bearer dummy'
+```
+
+Check that Envoy logged the request:
+
+```
+kubectl -n neo4j logs deployment/openai-egress-proxy
+```
+
+Then point genai.openai.baseurl at the Service in genai.conf. The exact /v1 suffix depends on whether your installed Neo4j plugin adds that path itself; check the Envoy log’s request path after a test call and adjust the base URL to avoid a missing or duplicated /v1.
+```
+genai.openai.baseurl=http://openai-egress-proxy.neo4j.svc.cluster.local:8080/v1
+```
+
+
+test: executing the query directly from neo4j pod via cypher-shell
+
+neo4j@core-2-0:~$ cypher-shell  -f myquery.txt --log genai.log -u neo4j -p $MY_PASS -d neo4j 
++--------------------------------------------------------------------------------------------------------------+
+| result                                                                                                       |
++--------------------------------------------------------------------------------------------------------------+
+| "Here are 5 child-friendly options from the list:                                                            |
+\                                                                                                              |
+\ - Spirited Away (Sen to Chihiro no kamikakushi) — enchanting animated fantasy, great for kids.               |
+\ - Star Wars: Episode IV - A New Hope — classic, adventurous space tale suitable for families.                |
+\ - Star Wars: Episode V - The Empire Strikes Back — slightly more intense but still kid-friendly and beloved. |
+\ - Frozen Planet — family-friendly nature documentary; educational and visually engaging.                     |
+\ - Concert for George — light, uplifting music documentary; safe for all ages."                               |
++--------------------------------------------------------------------------------------------------------------+
+
+1 row
+ready to start consuming query after 198 ms, results consumed after another 25386 ms
+
+

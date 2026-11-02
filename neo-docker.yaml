@@ -24,7 +24,8 @@ config:
 
   #dbms.bloom.license_file: "/licenses/bloom.license"
 
-#image:
+image:
+   customImage: neo4j:2026.10.1-enterprise
 #  customImage: neo-genai-test:dev
 #  imagePullPolicy: Never
 

@@ -1,0 +1,148 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openai-egress-proxy-config
+  namespace: neo4j
+data:
+  envoy.yaml: |
+    admin:
+      access_log_path: /dev/null
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 9901
+
+    node:
+      id: openai-egress-proxy
+      cluster: neo4j-lab
+
+    static_resources:
+      listeners:
+        - name: openai_listener
+          address:
+            socket_address:
+              address: 0.0.0.0
+              port_value: 8080
+          filter_chains:
+            - filters:
+                
+                - name: envoy.filters.network.http_connection_manager
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                    stat_prefix: openai_ingress
+                    access_log:
+                      - name: envoy.access_loggers.stdout
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                          log_format:
+                            text_format_source:
+                              inline_string: "%START_TIME% %REQ(:METHOD)% %REQ(:PATH)% %RESPONSE_CODE% %RESPONSE_FLAGS% %RESPONSE_CODE_DETAILS% %UPSTREAM_HOST% %UPSTREAM_TRANSPORT_FAILURE_REASON%\n"
+                    
+                    route_config:
+                      name: openai_route
+                      virtual_hosts:
+                        - name: openai
+                          domains: ["*"]
+                          routes:
+                            - match:
+                                prefix: "/"
+                              route:
+                                cluster: openai_api
+                                host_rewrite_literal: api.openai.com
+                                timeout: 300s
+                    http_filters:
+                      - name: envoy.filters.http.router
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+      clusters:
+        - name: openai_api
+          type: LOGICAL_DNS
+          connect_timeout: 10s
+          lb_policy: ROUND_ROBIN
+          dns_lookup_family: V4_ONLY
+          load_assignment:
+            cluster_name: openai_api
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: api.openai.com
+                          port_value: 443
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: api.openai.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+                  match_typed_subject_alt_names:
+                    - san_type: DNS
+                      matcher:
+                        exact: api.openai.com
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openai-egress-proxy
+  namespace: neo4j
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openai-egress-proxy
+  template:
+    metadata:
+      labels:
+        app: openai-egress-proxy
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: envoy
+          image: envoyproxy/envoy:tools-dev-5af8d913a34f6e71b6c6cf482ddf8d4b406df533
+          command: ["/usr/local/bin/envoy"]
+          args:
+            - "-c"
+            - "/etc/envoy/envoy.yaml"
+            - "--service-cluster"
+            - "openai-egress-proxy"
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+              readOnly: true
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: openai-egress-proxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openai-egress-proxy
+  namespace: neo4j
+spec:
+  type: ClusterIP
+  selector:
+    app: openai-egress-proxy
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
